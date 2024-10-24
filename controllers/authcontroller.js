@@ -1,8 +1,8 @@
 const crypto = require("crypto");
-
+const { v4: uuidv4 } = require("uuid");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
-
+const moment = require("moment");
 const asyncHandler = require("express-async-handler");
 // const nodemailer = require("nodemailer");
 const ApiError = require("../utils/apiError");
@@ -17,16 +17,36 @@ const Factory = require("../controllers/handlerFactory");
 // @route     /api/v1/auth/signup
 // @Access    Public
 exports.register = asyncHandler(async (req, res, next) => {
-  // 1 - Create User
+  const deviceId = uuidv4();
+  const { name, email, password } = req.body;
+
+  const expiresAt = moment().add(1, "month").toDate();
+  // 1 - Create the user in the database
   const user = await userModel.create({
-    name: req.body.name,
-    email: req.body.email,
-    password: req.body.password,
+    name,
+    email,
+    password,
+    activeDevice: {
+      deviceId,
+      token: "",
+      lastLogin: new Date(),
+    },
+    expiresAt,
   });
-  // 2 - generate json web token (jwt)
+
+  // 2 - Generate the JSON web token (JWT)
   const token = generateToken(user._id);
 
-  res.status(201).json({ data: sanitizeUser(user), token });
+  // 3 - Update the token in the user's activeDevice after generating it
+  user.activeDevice.token = token;
+  await user.save();
+
+  // 4 - Send the user data and token back to the client
+  res.status(201).json({
+    data: sanitizeUser(user), // Return sanitized user data
+    token, // Return the generated token
+    deviceId: user.activeDevice.deviceId,
+  });
 });
 
 // @Desc      login
@@ -34,16 +54,39 @@ exports.register = asyncHandler(async (req, res, next) => {
 // @Access    Public
 exports.login = asyncHandler(async (req, res, next) => {
   // 1) check if password and email in the body
-  const user = await userModel.findOne({ email: req.body.email });
+  const { email, password } = req.body;
+
+  const user = await userModel.findOne({ email });
 
   // 2) check user exiset & chech if password if correct
-  if (!user || !(await bcrypt.compare(req.body.password, user.password))) {
+  if (!user || !(await bcrypt.compare(password, user.password))) {
     return next(new ApiError("incorrect email or password", 401));
   }
+
+  const deviceId = uuidv4();
+
+  // log out from frst device
+  if (user.activeDevice && user.activeDevice.deviceId !== deviceId) {
+    user.activeDevice.token = null; // Invalidate the old token
+  }
+
+  const newToken = generateToken(user._id);
+
+  user.activeDevice = {
+    deviceId,
+    token: newToken,
+    lastLogin: new Date(),
+  };
+
+  await user.save();
+
+  // console.log(newToken);
+  // console.log(user);
+
   // 3) generate token
-  const token = generateToken(user._id);
+  // const token = generateToken(user._id);
   // 4) send response to client side
-  res.status(200).json({ data: sanitizeUser(user), token });
+  res.status(200).json({ data: sanitizeUser(user), token: newToken, deviceId });
 });
 
 exports.protect = asyncHandler(async (req, res, next) => {
@@ -79,7 +122,16 @@ exports.protect = asyncHandler(async (req, res, next) => {
     );
   }
 
-  // 4) check if user change his password after token created
+  // 4) Check if the user's account has expired
+  if (currentUser.role !== "admin") {
+    if (currentUser.expiresAt && currentUser.expiresAt < new Date()) {
+      return next(
+        new ApiError("Your account has expired. Please contact support.", 403)
+      );
+    }
+  }
+
+  // 5) check if user change his password after token created
   if (currentUser.passwordChangedAt) {
     const passwordChangedTimeStamp = parseInt(
       currentUser.passwordChangedAt.getTime() / 1000,
@@ -95,12 +147,22 @@ exports.protect = asyncHandler(async (req, res, next) => {
     }
   }
 
-  // 5) check if user is active
-  if (!currentUser.active) {
+  // 6) Check if the provided token matches the active device's token
+  if (!currentUser.activeDevice || currentUser.activeDevice.token !== token) {
     return next(
-      new ApiError("Your account is Deleted, please contact support", 401)
+      new ApiError(
+        "Invalid token. You may have logged in from another device.",
+        403
+      )
     );
   }
+
+  // 5) check if user is active
+  // if (!currentUser.active) {
+  //   return next(
+  //     new ApiError("Your account is Deleted, please contact support", 401)
+  //   );
+  // }
 
   req.user = currentUser;
 

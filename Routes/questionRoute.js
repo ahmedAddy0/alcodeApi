@@ -22,6 +22,7 @@ const {
 const apiError = require("../utils/apiError");
 
 const router = express.Router();
+router.use(authcontroller.protect);
 
 // const storage = multer.diskStorage({
 //   destination: function (req, file, cb) {

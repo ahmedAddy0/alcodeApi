@@ -4,11 +4,11 @@ const validatorMiddleware = require("../../middlewares/validatorMiddleware");
 const userModel = require("../../models/userModel");
 
 exports.signupValidator = [
-  check("name")
-    .notEmpty()
-    .withMessage("User Required")
-    .isLength({ min: 2 })
-    .withMessage("Too short User name"),
+  // check("name")
+  //   .notEmpty()
+  //   .withMessage("User Required")
+  //   .isLength({ min: 2 })
+  //   .withMessage("Too short User name"),
   check("email")
     .notEmpty()
     .withMessage("Email Required")
